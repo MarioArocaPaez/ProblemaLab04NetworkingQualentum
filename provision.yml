@@ -1,0 +1,76 @@
+---
+- name: Configurar servidor HTTPS
+  hosts: all
+  become: true
+  tasks:
+    # Actualizar repositorios e instalar dependencias
+    - name: Instalar paquetes necesarios
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - nginx
+          - openssl
+        state: present
+
+    # Crear el certificado SSL autofirmado
+    - name: Crear directorio para SSL
+      file:
+        path: /etc/ssl/localcerts
+        state: directory
+        owner: root
+        group: root
+
+    - name: Generar certificado SSL autofirmado
+      command: |
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout /etc/ssl/localcerts/local.qualentum.org.key \
+        -out /etc/ssl/localcerts/local.qualentum.org.crt \
+        -subj "/C=US/ST=California/L=San Francisco/O=Qualentum/CN=local.qualentum.org"
+
+    # Configurar Nginx para HTTPS
+    - name: Configurar Nginx para HTTPS
+      copy:
+        dest: /etc/nginx/sites-available/default
+        content: |
+          server {
+              listen 80;
+              server_name local.qualentum.org;
+              return 301 https://$host$request_uri;
+          }
+
+          server {
+              listen 443 ssl;
+              server_name local.qualentum.org;
+
+              ssl_certificate /etc/ssl/localcerts/local.qualentum.org.crt;
+              ssl_certificate_key /etc/ssl/localcerts/local.qualentum.org.key;
+
+              location / {
+                  proxy_pass http://127.0.0.1:5000;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+              }
+          }
+
+    - name: Reiniciar Nginx
+      service:
+        name: nginx
+        state: restarted
+
+    # Instalar la aplicación Python
+    - name: Copiar aplicación Python
+      copy:
+        src: app.py
+        dest: /home/vagrant/app.py
+
+    - name: Instalar Flask
+      pip:
+        name: flask
+        executable: pip3
+
+    - name: Iniciar aplicación Flask
+      shell: |
+        FLASK_APP=/home/vagrant/app.py flask run --host=0.0.0.0 --port=5000 &
+        echo $! > /home/vagrant/flask_app.pid
+        chown vagrant:vagrant /home/vagrant/flask_app.pid
